@@ -19,46 +19,51 @@ class SpotiPlex:
 
     def getSpotifyPlaylist(self, plId):
         'Generate and return a list of tracks of the Spotify playlist'
-        playlist = self.sp.user_playlist(self.user, plId)
-        totalTracks = playlist['tracks']['total']
+
+        #playlist = self.sp.user_playlist(self.user, plId)
+        playlist = self.sp.user_playlist_tracks(self.user, playlist_id=plId)
+
+        tracks = playlist['items']
+        while playlist['next']:
+            playlist = self.sp.next(playlist)
+            tracks.extend(playlist['items'])
 
         items = []
-        if totalTracks > 100:
-            # implement dealing with next url
-            pass
-        else:
-            for item in playlist['tracks']['items']:
-                items.append({
-                    'title': item['track']['name'],
-                    'album': item['track']['album']['name'],
-                    'artist': item['track']['artists'][0]['name'],
-                    #'number': item['track']['track_number'],
-                    #'img': item['track']['album']['images'][0]['url']
-                })
+        for item in tracks:
+            items.append({
+                'title': item['track']['name'],
+                'album': item['track']['album']['name'],
+                'artist': item['track']['artists'][0]['name'],
+                'isrc': item['track']['external_ids']['isrc']
+                #'number': item['track']['track_number'],
+                #'img': item['track']['album']['images'][0]['url']
+            })
         
         return items
 
     def checkPlexFiles(self, playlist):
-        'Check if the songs in the playlist are present on the Plex server. Returns list of items to include in the playlist'
+        'Check if the songs in the playlist are present on the Plex server. Returns list of found and missing items'
 
         tracks = []
         missing = []
 
         for item in playlist:
-            results = self.plex.search(item['name'], mediatype='track')
+            results = self.plex.search(item['title'], mediatype='track')
             if not results:
+                missing.append(item)
                 continue
         
             for result in results:
                 if type(result) != plexapi.audio.Track:
                     continue
                 else:
-                    if result.grandparentTitle == item['artist'] and result.parentTitle == item['album']:
+                    if result.grandparentTitle.lower() == item['artist'].lower():# and result.parentTitle == item['album']:
                         tracks.append(result)
                         break
                     else:
-                        missing.append(item)
-                        break
+                        if result == results[-1]:
+                            missing.append(item)
+                            break
 
         return tracks, missing
     
@@ -71,51 +76,38 @@ class SpotiPlex:
             return None
 
     def comparePlaylists(self, sPlaylist, pPlaylist):
-        'Compares the extracted Spotify playlist with the existing Plex playlist. Returns list of tracks to create the new playlist version from'
+        'Compares the extracted Spotify playlist with the existing Plex playlist. Returns list of tracks to create the new playlist version from and missing songs in Plex'
 
+        tracksToAdd = sPlaylist
         plexTracks = pPlaylist.items()
-        plexItems = []
+        plexOnlyItems = []
+        temp = []
         for track in plexTracks:
-            plexItems.append({
-                'artist': track.grandparentTitle.lower(),
-                'album': track.parentTitle.lower(),
-                'title': track.title.lower()
-            })
+            # remove any tracks from Spotify list that are already in Plex
+            lastLen = len(temp)
+            temp = list(filter(lambda item: not item['title'] == track.title, tracksToAdd))
+            if not len(temp) == lastLen:
+                tracksToAdd = temp
+            else:
+                plexOnlyItems.append(track)
 
-        spotifyItems = []
-        for item in sPlaylist:
-            spotifyItems.append({
-                'artist': item['artist'].lower(),
-                'album': item['album'].lower(),
-                'title': item['title'].lower()
-            })
+        return tracksToAdd, plexOnlyItems
 
-        notInPlex = [item for item in spotifyItems if item not in plexItems]
-        notInSpotify = [item for item in plexItems if item not in spotifyItems]
-
-        result = []
-        for item in notInPlex:
-            for sItem in sPlaylist:
-                if item['title'] == sItem['title'].lower():
-                    result.append(sItem)
-        for item in notInSpotify:
-            for track in plexTracks:
-                if item['title'] == track.title.lower():
-                    result.append({
-                        'artist': track.grandparentTitle,
-                        'album': track.parentTitle,
-                        'title': track.title
-                    })
-        return result
-
-    def createPlexItems(self, newItems):
-        'Creates and returns list of Plex Media items'
-
-        #test = plexapi.media.Media(self.plex, )
-        pass
-
-    def createPlexPlaylist(self, name, items):
-        'Create the playlist on the Plex server with the given items'
+    def createPlexPlaylist(self, name, playlist=None):
+        'Create the playlist on the Plex server from given name and a item list'
     
-        #test = plex.createPlaylist(name, items=items)
-        pass
+        newPlaylist = self.plex.createPlaylist(name, items=playlist)
+        return
+
+    def addToPlexPlaylist(self, plexPlaylist, newItems):
+        'Add more items to a Plex playlist'
+
+        return plexPlaylist.addItems(newItems)
+
+    def removeFromPlexPlaylist(self, plexPlaylist, itemsToRemove):
+        'Remove given items from a Plex playlist'
+
+        ## Seems not to work properly yet
+
+        for item in itemsToRemove:
+            plexPlaylist.removeItem(item)
